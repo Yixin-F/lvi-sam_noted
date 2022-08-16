@@ -13,6 +13,7 @@
 #include "BRIEF.h"
 #include "../DUtils/DUtils.h"
 #include <boost/dynamic_bitset.hpp>
+#include <opencv2/imgproc/types_c.h>
 #include <vector>
 
 using namespace std;
