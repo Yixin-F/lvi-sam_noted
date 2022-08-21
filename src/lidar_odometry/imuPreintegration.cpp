@@ -103,6 +103,7 @@ public:
         map_to_odom = tf::Transform(tf::createQuaternionFromRPY(0, 0, 0), tf::Vector3(0, 0, 0));
 
         // imu 预积分的噪声协方差
+        // > 协方差的初值一般都是标定出来的，然后在后面的传播中更新，如isam2优化、滤波等
         boost::shared_ptr<gtsam::PreintegrationParams> p = gtsam::PreintegrationParams::MakeSharedU(imuGravity);
         p->accelerometerCovariance  = gtsam::Matrix33::Identity(3,3) * pow(imuAccNoise, 2); // acc white noise in continuous // ? 对角线形式，zyz互不影响？
         p->gyroscopeCovariance      = gtsam::Matrix33::Identity(3,3) * pow(imuGyrNoise, 2); // gyro white noise in continuous
@@ -530,7 +531,7 @@ public:
         odometry.twist.twist.angular.y = thisImu.angular_velocity.y + prevBiasOdom.gyroscope().y();
         odometry.twist.twist.angular.z = thisImu.angular_velocity.z + prevBiasOdom.gyroscope().z();
         
-        // information for VINS initialization
+        // ! information for VINS initialization, 原始vins的初始化需要三角化，而现在只需要使用lio-sam的imu预积分结果里程计就可以
         odometry.pose.covariance[0] = double(imuPreintegrationResetId);
         odometry.pose.covariance[1] = prevBiasOdom.accelerometer().x();
         odometry.pose.covariance[2] = prevBiasOdom.accelerometer().y();
@@ -542,6 +543,7 @@ public:
         pubImuOdometry.publish(odometry);
 
         // publish imu path
+        // ? 这个imu path是给mapOptmization.cpp中的scan2map做初值用的吗，这样看cloud_info.msg里的值是怎样填充的
         static nav_msgs::Path imuPath;
         static double last_path_time = -1;
         if (imuTime - last_path_time > 0.1)

@@ -266,7 +266,7 @@ double ROS_TIME(T msg)
     return msg->header.stamp.toSec();
 }
 
-
+// ! 普通六轴imu就可以使用
 template<typename T>
 void imuAngular2rosAngular(sensor_msgs::Imu *thisImuMsg, T *angular_x, T *angular_y, T *angular_z)
 {
@@ -285,6 +285,8 @@ void imuAccel2rosAccel(sensor_msgs::Imu *thisImuMsg, T *acc_x, T *acc_y, T *acc_
 }
 
 
+// > 四元数转rpy
+// ! 这边只有九轴imu才可以直接读取rpy值！！
 template<typename T>
 void imuRPY2rosRPY(sensor_msgs::Imu *thisImuMsg, T *rosRoll, T *rosPitch, T *rosYaw)
 {

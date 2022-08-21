@@ -80,7 +80,7 @@ private:
     float odomIncreY;
     float odomIncreZ;
 
-    lvi_sam::cloud_info cloudInfo;
+    lvi_sam::cloud_info cloudInfo; // > 自定义消息类型
     double timeScanCur;
     double timeScanNext;
     std_msgs::Header cloudHeader;
@@ -90,8 +90,15 @@ public:
     ImageProjection():
             deskewFlag(0)
     {
+        // 重新订阅了imu消息，与imuPreintegration.cpp无关
         subImu        = nh.subscribe<sensor_msgs::Imu>        (imuTopic, 2000, &ImageProjection::imuHandler, this, ros::TransportHints().tcpNoDelay());
+
+        // ? 订阅vins的imu预积分里程计？
+        // ! 好像是lio-sam与vins的预积分结果互用，lio-sam的预积分里程计用于vins初始化，而vins预积分里程计用于lio-sam的去畸变
+        // ! 原lio-sam此处为订阅imu增量式里程计：来自IMUPreintegration发布的增量式里程计话题(前一帧激光帧优化基础上), 这个话题已经不存在了，它用于去畸变和为scan2map提供初值
+        // ! subOdom       = nh.subscribe<nav_msgs::Odometry>(odomTopic+"_incremental", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
         subOdom       = nh.subscribe<nav_msgs::Odometry>      (PROJECT_NAME + "/vins/odometry/imu_propagate_ros", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
+
         subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(pointCloudTopic, 5, &ImageProjection::cloudHandler, this, ros::TransportHints().tcpNoDelay());
 
         pubExtractedCloud = nh.advertise<sensor_msgs::PointCloud2> (PROJECT_NAME + "/lidar/deskew/cloud_deskewed", 5);
@@ -100,6 +107,7 @@ public:
         allocateMemory();
         resetParameters();
 
+        // > setVerbosityLevel用于设置控制台输出的信息，这里是指汇报任何pcl错误信息
         pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
     }
 
@@ -119,11 +127,13 @@ public:
 
         resetParameters();
     }
+
     //对每个获取的lidar message进行参数重置
     void resetParameters()
     {
         laserCloudIn->clear();
         extractedCloud->clear();
+
         // reset range matrix for range image projection
         // 雷达深度图 Range Image
         rangeMat = cv::Mat(N_SCAN, Horizon_SCAN, CV_32F, cv::Scalar::all(FLT_MAX));
@@ -140,13 +150,18 @@ public:
             imuRotZ[i] = 0;
         }
     }
+
     //析构函数
     ~ImageProjection(){}
 
     void imuHandler(const sensor_msgs::Imu::ConstPtr& imuMsg)
     {
-        sensor_msgs::Imu thisImu = imuConverter(*imuMsg); //将imu的三个轴的线加速度和角加速度的信息旋转到以lidar为中心的坐标系
+        sensor_msgs::Imu thisImu = imuConverter(*imuMsg);  // 将imu的三个轴的线加速度和角加速度的信息旋转到以lidar为中心的坐标系
+
+        // > lock_guard对象不以任何方式管理互斥对象的生存期，不会因为对象抛出异常而导致死锁，简单来讲就是自动管理上锁时间，优于.lock()和.unlock()的组合
+        // > 但是对于一个锁，仍需要两个代码地点的对应关系，deskewInfo()中体现到了，读取与去畸变同时使用到了imuQueue中的内存，为了防止错误，需要用互斥锁进行互斥
         std::lock_guard<std::mutex> lock1(imuLock);
+
         imuQueue.push_back(thisImu);
     }
 
@@ -156,21 +171,27 @@ public:
         odomQueue.push_back(*odometryMsg);
     }
 
+    // > 点云操作主函数
     void cloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
-        //1 检查队列里面的点云数量是否满足要求 并做一些前置操作
+        // Step 1 检查队列里面的点云数量是否满足要求 并做一些前置操作
         if (!cachePointCloud(laserCloudMsg))
             return;
-        //2 对IMU和视觉里程计去畸变
+
+        // Step 2 对IMU和视觉里程计去畸变
         if (!deskewInfo())
             return;
-        //3 获取雷达深度图
+
+        // Step 3 获取雷达深度图
         projectPointCloud();
-        //4 点云提取
+
+        // Step 4 点云提取
         cloudExtraction();
-        //5 发布点云
+
+        // Step 5 发布点云
         publishClouds();
-        //6 重置参数
+
+        // Step 6 重置参数
         resetParameters();
     }
 
@@ -203,7 +224,7 @@ public:
         }
 
         // check ring channel
-        // 检查 点云是否包含ring通道
+        // > 检查 点云是否包含ring通道, useful
         // 该部分主要用来计算rowIdn
         static int ringFlag = 0;
         if (ringFlag == 0)
@@ -223,6 +244,7 @@ public:
                 ros::shutdown();
             }
         }
+
         // check point time
         //yaml文件中 timeField: "time"    # point timestamp field, Velodyne - "time", Ouster - "t"
         if (deskewFlag == 0)
@@ -245,6 +267,7 @@ public:
         return true;
     }
 
+    // > 点云去畸变主函数
     bool deskewInfo()
     {
         std::lock_guard<std::mutex> lock1(imuLock);
@@ -253,20 +276,23 @@ public:
         // make sure IMU data available for the scan
         if (imuQueue.empty() || imuQueue.front().header.stamp.toSec() > timeScanCur || imuQueue.back().header.stamp.toSec() < timeScanNext)
         {
-            ROS_DEBUG("Waiting for IMU data ...");
+            ROS_DEBUG("Waiting for IMU data ...");  // imuQueue.front().header.stamp.toSec() 这种情况下是等不来的，虽然不太可能发生这种情况
             return false;
         }
+
         // 2.1 IMU去畸变
         imuDeskewInfo();
+
         // 2.2 视觉里程计去畸变
         odomDeskewInfo();
 
         return true;
     }
-    // 2.1 IMU 去畸变
+
+    // >IMU 去畸变
     void imuDeskewInfo()
     {
-        cloudInfo.imuAvailable = false;
+        cloudInfo.imuAvailable = false;  
 
         while (!imuQueue.empty())
         {
@@ -286,12 +312,12 @@ public:
             sensor_msgs::Imu thisImuMsg = imuQueue[i];
             double currentImuTime = thisImuMsg.header.stamp.toSec();
 
-            // get roll, pitch, and yaw estimation for this scan
+            // > get roll, pitch, and yaw estimation for this scan, 用于scan2map的初始化
             if (currentImuTime <= timeScanCur)
-                //将message里面的IMU消息转为tf类型的数据
-                //前者只是个float的类型的结构体 后者则是一个类 封装了很多函数
-                //将imu的朝向赋值给点云 ，如果非九轴imu在此处会不准
+                //将message里面的IMU消息转为tf类型的数据，前者只是个float的类型的结构体 后者则是一个类 封装了很多函数
+                // ! 将imu的朝向赋值给点云 ，如果非九轴imu在此处会不准
                 imuRPY2rosRPY(&thisImuMsg, &cloudInfo.imuRollInit, &cloudInfo.imuPitchInit, &cloudInfo.imuYawInit);
+
             //当前的IMU时间戳比lidar时间戳大过0.01s
             if (currentImuTime > timeScanNext + 0.01)
                 break;
@@ -309,10 +335,10 @@ public:
             double angular_x, angular_y, angular_z;
             imuAngular2rosAngular(&thisImuMsg, &angular_x, &angular_y, &angular_z);
 
-            // integrate rotation
+            // > integrate rotation, 计算每一时刻imu相对于初始时刻imu(scan扫描起始时刻)的增量，
             // 计算时间差 当前的IMU时间戳减去上一时刻的IMU时间戳得到时间增量
             double timeDiff = currentImuTime - imuTime[imuPointerCur-1];
-            // 当前时刻的旋转等于上一时刻的旋转加上上一时刻角速度乘上时间增量
+            // 手动累加过程，当前时刻的旋转等于上一时刻的旋转加上上一时刻角速度乘上时间增量
             imuRotX[imuPointerCur] = imuRotX[imuPointerCur-1] + angular_x * timeDiff;
             imuRotY[imuPointerCur] = imuRotY[imuPointerCur-1] + angular_y * timeDiff;
             imuRotZ[imuPointerCur] = imuRotZ[imuPointerCur-1] + angular_z * timeDiff;
@@ -320,14 +346,16 @@ public:
             ++imuPointerCur;
         }
 
-        --imuPointerCur;
+        --imuPointerCur;  // 索引值要减去个1
 
         if (imuPointerCur <= 0)
             return;
 
         cloudInfo.imuAvailable = true;
     }
-    // 视觉里程计去畸变
+
+    //  > 视觉里程计去畸变
+    //?  vins的视觉里程计？？
     void odomDeskewInfo()
     {
         cloudInfo.odomAvailable = false;
@@ -343,13 +371,13 @@ public:
         if (odomQueue.empty())
             return;
 
-        if (odomQueue.front().header.stamp.toSec() > timeScanCur)
+        if (odomQueue.front().header.stamp.toSec() > timeScanCur)  // ! 要求卡的很死，小于0.01s的误差
             return;
 
         // get start odometry at the beinning of the scan
         nav_msgs::Odometry startOdomMsg;
 
-        for (int i = 0; i < (int)odomQueue.size(); ++i)
+        for (int i = 0; i < (int)odomQueue.size(); ++i)  // ! 这个操作是在找最接近timeScanCur的odomQueue[i]
         {
             startOdomMsg = odomQueue[i];
 
@@ -556,7 +584,7 @@ public:
             fullCloud->points[index] = thisPoint;
         }
     }
-    //点云RangeImage
+    // > 点云RangeImage
     void cloudExtraction()
     {
         int count = 0;

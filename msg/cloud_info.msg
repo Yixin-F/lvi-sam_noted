@@ -7,7 +7,7 @@ int32[] endRingIndex
 int32[]  pointColInd # point column index in range image
 float32[] pointRange # point range 
 
-int64 imuAvailable
+int64 imuAvailable  # scan2map初值可用(9轴Imu才行)，当前scan中的每一时刻imu相对于起始时刻的旋转增量可用(6轴imu即可)
 int64 odomAvailable
 
 # Attitude for lidar odometry initialization
