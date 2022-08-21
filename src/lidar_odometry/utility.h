@@ -2,39 +2,39 @@
 #ifndef _UTILITY_LIDAR_ODOMETRY_H_
 #define _UTILITY_LIDAR_ODOMETRY_H_
 
-#include <ros/ros.h>
+#include <ros/ros.h>  // ros-core
 
-#include <std_msgs/Header.h>
-#include <std_msgs/Float64MultiArray.h>
-#include <sensor_msgs/Imu.h>
-#include <sensor_msgs/PointCloud2.h>
-#include <sensor_msgs/NavSatFix.h>
-#include <nav_msgs/Odometry.h>
-#include <nav_msgs/Path.h>
-#include <visualization_msgs/Marker.h>
+#include <std_msgs/Header.h>  // std消息
+#include <std_msgs/Float64MultiArray.h>  // ?
+#include <sensor_msgs/Imu.h>  // imu传感器消息
+#include <sensor_msgs/PointCloud2.h>  // 激光点云消息
+#include <sensor_msgs/NavSatFix.h>  // gps消息
+#include <nav_msgs/Odometry.h>  // 里程计(rviz中的rgb坐标系)
+#include <nav_msgs/Path.h>  // 路径
+#include <visualization_msgs/Marker.h>  // 标注(仅显示)
 #include <visualization_msgs/MarkerArray.h>
 
-#include <opencv/cv.h>
+#include <opencv/cv.h>  // opencv-core
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/search/impl/search.hpp>
 #include <pcl/range_image/range_image.h>
-#include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/kdtree/kdtree_flann.h>  // kd
 #include <pcl/common/common.h>
 #include <pcl/common/transforms.h>
 #include <pcl/registration/icp.h>
-#include <pcl/registration/gicp.h>
+#include <pcl/registration/gicp.h>  // 面到面icp
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/filter.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/crop_box.h> 
-#include <pcl_conversions/pcl_conversions.h>
+#include <pcl_conversions/pcl_conversions.h>  // 数据类型转换
 
-#include <tf/LinearMath/Quaternion.h>
-#include <tf/transform_listener.h>
+#include <tf/LinearMath/Quaternion.h>  // 四元数
+#include <tf/transform_listener.h>  // 监听
 #include <tf/transform_datatypes.h>
-#include <tf/transform_broadcaster.h>
+#include <tf/transform_broadcaster.h>  // 发布
  
 #include <vector>
 #include <cmath>
@@ -51,8 +51,8 @@
 #include <limits>
 #include <iomanip>
 #include <array>
-#include <thread>
-#include <mutex>
+#include <thread>  // 多线程
+#include <mutex>  // 线程锁
 
 using namespace std;
 

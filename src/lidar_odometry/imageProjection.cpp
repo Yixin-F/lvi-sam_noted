@@ -1,14 +1,14 @@
 #include "utility.h"
 #include "lvi_sam/cloud_info.h"
 
-// Velodyne 数据类型 （点云坐标、密度、线圈数、时间戳）
+//  > Velodyne 数据类型 （点云坐标、密度、线圈数、时间戳）
 struct PointXYZIRT
 {
-    PCL_ADD_POINT4D //分别有float类型的 x、y、z 还有一个对齐变量
-    PCL_ADD_INTENSITY;//float类型的密度 
-    uint16_t ring; // 总的线圈数
-    float time; // 时间戳
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW //保证在内存中是对齐的状态
+    PCL_ADD_POINT4D ;  // > 分别有float类型的 x、y、z 还有一个对齐变量
+    PCL_ADD_INTENSITY;  // > float类型的密度 
+    uint16_t ring;   // > 总的线圈数, velodyne独有ring信息
+    float time;   // > 时间戳
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW   // > 保证在内存中是对齐的状态
 } EIGEN_ALIGN16;
 
 POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIRT,
@@ -16,7 +16,7 @@ POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIRT,
 (uint16_t, ring, ring) (float, time, time)
 )
 
-// Ouster 数据类型 （点云坐标、密度、时间戳、反射率、错误率、范围）
+// Ouster 数据类型 （点云坐标、密度、时间戳、反射率、线圈数、错误率、范围）
 // struct PointXYZIRT {
 //     PCL_ADD_POINT4D;
 //     float intensity;
@@ -40,8 +40,9 @@ class ImageProjection : public ParamServer
 {
 private:
 
-    std::mutex imuLock; //imu锁
-    std::mutex odoLock; //里程计锁
+    // ! 以下这两个锁是互斥关系
+    std::mutex imuLock;   //  > imu锁
+    std::mutex odoLock;   // > 里程计锁
 
     ros::Subscriber subLaserCloud; //雷达点云订阅
     ros::Publisher  pubLaserCloud; //雷达点云发布
@@ -72,7 +73,7 @@ private:
     pcl::PointCloud<PointType>::Ptr   extractedCloud;
 
     int deskewFlag;
-    cv::Mat rangeMat;
+    cv::Mat rangeMat; // > range image
 
     bool odomDeskewFlag;
     float odomIncreX;

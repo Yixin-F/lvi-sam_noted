@@ -20,7 +20,10 @@ lvi_sam:
   timeField: "time"                           # point timestamp field, Velodyne - "time", Ouster - "t"
   downsampleRate: 1                           # default: 1. Downsample your data if too many points. i.e., 16 = 64 / 4, 16 = 16 / 1 
 
-  # IMU Settings
+  # IMU Settings 
+  # // > bias是需要事先imu标定的，但是初始bias好像在代码里默认为0了，等待后面的优化??
+  # // > 有两种噪声：bias的噪声(游走噪声)和速度噪声(白噪声)，这可以读EMS芯片手册，这只是初始噪声，在代码里每次重置isam2优化器时会继承最近帧的噪声
+  # // > 后面用来--初始化--isam2中的imu预积分器
   imuAccNoise: 3.9939570888238808e-03
   imuGyrNoise: 1.5636343949698187e-03
   imuAccBiasN: 6.4356659353532566e-05
