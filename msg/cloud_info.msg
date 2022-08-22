@@ -11,11 +11,13 @@ int64 imuAvailable  # scan2map初值可用(9轴Imu才行)，当前scan中的每�
 int64 odomAvailable
 
 # Attitude for lidar odometry initialization
+# 来自imu预积分
 float32 imuRollInit
 float32 imuPitchInit
 float32 imuYawInit
 
 # Odometry 
+# 来自VIS里程计
 float32 odomX
 float32 odomY
 float32 odomZ

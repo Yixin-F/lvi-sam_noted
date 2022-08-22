@@ -543,7 +543,8 @@ public:
         pubImuOdometry.publish(odometry);
 
         // publish imu path
-        // ? 这个imu path是给mapOptmization.cpp中的scan2map做初值用的吗，这样看cloud_info.msg里的值是怎样填充的
+        // ? 这个imu path是给mapOptmization.cpp中的scan2map做初值用的吗？不是的，这里的path只是用来rviz显示
+        // ? scan2map做初值首选VIS里程计提供，如果VIS失效，则直接由九轴imu提供，这些数据都存在cloud_info.msg里
         static nav_msgs::Path imuPath;
         static double last_path_time = -1;
         if (imuTime - last_path_time > 0.1)

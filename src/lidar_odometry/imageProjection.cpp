@@ -91,20 +91,20 @@ public:
             deskewFlag(0)
     {
         // 重新订阅了imu消息，与imuPreintegration.cpp无关
-        // > 用于点云去畸变和为scan2map提供初值的imu数据 -> 用在在VIS失效
+        // > 用于点云旋转去畸变和为scan2map提供初值的imu数据 -> 用在在VIS失效
         subImu        = nh.subscribe<sensor_msgs::Imu>        (imuTopic, 2000, &ImageProjection::imuHandler, this, ros::TransportHints().tcpNoDelay());
 
         // ! 激光惯性子系统(LIS)与视觉惯性子系统的关系 -> 紧耦合关系
         // > 1) VIS利用LIS的初始化估计来初始化，包括bias、位姿等，快且鲁棒
         // > 2) VIS的精度提高依赖于LIS深度信息的提取
-        // > 3) LIS利用VIS结果来scan2map初始化，如果VIS失败，则直接使用imu的值
-        // > 4) 回环检测先经VIS，再LIS经匹配
+        // ? 3) LIS利用VIS结果来scan2map初始化，如果VIS失败，则直接使用imu的值
+        // > 4) 回环检测先经VIS，再LIS优化匹配
         // > 5) VIS和LIS都可以在一方失效后独立运行(VIS跟踪失败或LIS特征缺失)，提高整个系统的鲁棒性
 
         // ? 订阅vins的imu预积分里程计？
         // ! 原lio-sam此处为订阅imu增量式里程计：来自IMUPreintegration发布的增量式里程计话题(前一帧激光帧优化基础上), 这个话题已经不存在了，它用于去畸变和为scan2map提供初值
         // ! subOdom       = nh.subscribe<nav_msgs::Odometry>(odomTopic+"_incremental", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
-        // > 用于点云去畸变和scan2map提供初值的视觉里程计数据  -> VIS不失效时首选
+        // > 用于点云平移去畸变和scan2map提供初值的视觉里程计数据  -> VIS不失效时首选(LIS初始化时仍使用imu来提供scan2map的初值，因为LIS先初始化)
         subOdom       = nh.subscribe<nav_msgs::Odometry>      (PROJECT_NAME + "/vins/odometry/imu_propagate_ros", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
 
         subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(pointCloudTopic, 5, &ImageProjection::cloudHandler, this, ros::TransportHints().tcpNoDelay());
@@ -288,16 +288,17 @@ public:
             return false;
         }
 
-        // 2.1 IMU去畸变
+        // >  IMU旋转去畸变
         imuDeskewInfo();
 
-        // 2.2 视觉里程计去畸变
+        //  > VIS平移去畸变
         odomDeskewInfo();
 
         return true;
     }
 
     // >IMU 去畸变
+    // ! imu仅用于点云旋转去畸变
     void imuDeskewInfo()
     {
         cloudInfo.imuAvailable = false;  
@@ -326,7 +327,7 @@ public:
                 // ! 将imu的朝向赋值给点云 ，如果非九轴imu在此处会不准
                 imuRPY2rosRPY(&thisImuMsg, &cloudInfo.imuRollInit, &cloudInfo.imuPitchInit, &cloudInfo.imuYawInit);
 
-            //当前的IMU时间戳比lidar时间戳大过0.01s
+            // 当前的IMU时间戳比lidar时间戳大过0.01s
             if (currentImuTime > timeScanNext + 0.01)
                 break;
 
@@ -363,7 +364,8 @@ public:
     }
 
     //  > 视觉里程计去畸变
-    //?  vins的视觉里程计？？
+    // ! VIS去畸变仅用于点云的平移去畸变，原版lio-sam是使用imu平移去畸变的，但是代码里把平移去畸变注释掉了
+    // ?  vins的视觉里程计？？是的，它为LIS的scan2map和去畸变提供数据来源(除LIS初始化过程外)
     void odomDeskewInfo()
     {
         cloudInfo.odomAvailable = false;
@@ -399,10 +401,10 @@ public:
         tf::quaternionMsgToTF(startOdomMsg.pose.pose.orientation, orientation);
 
         double roll, pitch, yaw;
-        tf::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
+        tf::Matrix3x3(orientation).getRPY(roll, pitch, yaw);   // 得到当前scan的起始时刻rpy
 
         // Initial guess used in mapOptimization
-        //将点云信息中的位姿设置为视觉里程计的位姿
+        // > 将点云信息中的位姿设置为视觉里程计的位姿
         cloudInfo.odomX = startOdomMsg.pose.pose.position.x;
         cloudInfo.odomY = startOdomMsg.pose.pose.position.y;
         cloudInfo.odomZ = startOdomMsg.pose.pose.position.z;
@@ -416,13 +418,15 @@ public:
         // get end odometry at the end of the scan
         // 检查视觉里程计队列末尾的值
         odomDeskewFlag = false;
-        // 如果视觉里程计队里末尾值的时间戳小于两帧lidar时间戳 说明视觉里程计频率过低
+
+        // 如果视觉里程计队里末尾值的时间戳小于两帧lidar时间戳，说明视觉里程计频率过低，没有覆盖当前扫描帧
         if (odomQueue.back().header.stamp.toSec() < timeScanNext)
             return;
-        // 
+
+        // VIS里程计末尾值
         nav_msgs::Odometry endOdomMsg;
 
-        for (int i = 0; i < (int)odomQueue.size(); ++i)
+        for (int i = 0; i < (int)odomQueue.size(); ++i)  // 找最接近timeScanNext的VIS里程计
         {
             endOdomMsg = odomQueue[i];
 
@@ -431,49 +435,59 @@ public:
             else
                 break;
         }
+
         // 在visual_estimator/utility/visualization.cpp中发布给LIO视觉里程计信息的最后一项为failureCount
         // 初始值设为-1，每次clearState都会导致++failureCount
-        // 如果前后的failureCount不一致说明在Lidar当前帧内视觉里程计至少重启了一次，跟踪失败，那么值就不准确了
-        // 因此不对当前的视觉里程计去畸变
+        // ! 如果前后的failureCount不一致说明在Lidar当前帧内视觉里程计至少重启了一次，跟踪失败，那么值就不准确了
+        // 因此不使用视觉里程计对点云平移去畸变
         if (int(round(startOdomMsg.pose.covariance[0])) != int(round(endOdomMsg.pose.covariance[0])))
             return;
 
+        // 扫描起始时刻全局位姿
         Eigen::Affine3f transBegin = pcl::getTransformation(startOdomMsg.pose.pose.position.x, startOdomMsg.pose.pose.position.y, startOdomMsg.pose.pose.position.z, roll, pitch, yaw);
 
+        // 扫描结束时刻全局位姿
         tf::quaternionMsgToTF(endOdomMsg.pose.pose.orientation, orientation);
         tf::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
         Eigen::Affine3f transEnd = pcl::getTransformation(endOdomMsg.pose.pose.position.x, endOdomMsg.pose.pose.position.y, endOdomMsg.pose.pose.position.z, roll, pitch, yaw);
 
+        // 扫描起止时刻之间的相对位姿变换
         Eigen::Affine3f transBt = transBegin.inverse() * transEnd;
 
         float rollIncre, pitchIncre, yawIncre;
         pcl::getTranslationAndEulerAngles(transBt, odomIncreX, odomIncreY, odomIncreZ, rollIncre, pitchIncre, yawIncre);
+
         //在后续的findPosition中使用
         odomDeskewFlag = true;
     }
-    //3.1.1
+
+    // > 使用imu对点云旋转插值去畸变
     void findRotation(double pointTime, float *rotXCur, float *rotYCur, float *rotZCur)
     {
         *rotXCur = 0; *rotYCur = 0; *rotZCur = 0;
 
         int imuPointerFront = 0;
+
         //找到点云时间戳前最近的一个imu时间戳
-        while (imuPointerFront < imuPointerCur)
+        while (imuPointerFront < imuPointerCur)  // imuPointerCur是当前扫描时间内所覆盖的imu预积分数据，头尾Imu数据精准的把当前scan精准且密闭地夹住
         {
             //点云时间比IMU时间队列中最靠前的都小 则直接返回
             if (pointTime < imuTime[imuPointerFront])
                 break;
             ++imuPointerFront;
         }
-        //函数到这时imuPointerFront=imuPointerCur
+
+        // ? 函数到这时imuPointerFront=imuPointerCur，也意思为这是最后一个扫描点
+        // ? 最后一个imu数据其实不是要找的旋转量，为什么不插值呢，是因为没有覆盖到最后一个扫描点
         if (pointTime > imuTime[imuPointerFront] || imuPointerFront == 0)
         {
             //此时点云的姿态等于IMU的姿态
             *rotXCur = imuRotX[imuPointerFront];
             *rotYCur = imuRotY[imuPointerFront];
             *rotZCur = imuRotZ[imuPointerFront];
-        } else {
-            //如果点云时间还要靠前，则用差值的方法计算姿态
+        } 
+        else 
+        { //如果点云时间还要靠前，则用插值的方法计算姿态
             int imuPointerBack = imuPointerFront - 1;
             double ratioFront = (pointTime - imuTime[imuPointerBack]) / (imuTime[imuPointerFront] - imuTime[imuPointerBack]);
             double ratioBack = (imuTime[imuPointerFront] - pointTime) / (imuTime[imuPointerFront] - imuTime[imuPointerBack]);
@@ -482,7 +496,8 @@ public:
             *rotZCur = imuRotZ[imuPointerFront] * ratioFront + imuRotZ[imuPointerBack] * ratioBack;
         }
     }
-    //3.1.2 对位置信息进行去畸变 原版说速度比较慢时不起太大作用
+
+    // > 在假设几乎匀速状态下，使用VIS里程计比例平移去畸变，原版说速度比较慢时不起太大作用，也注释掉了
     void findPosition(double relTime, float *posXCur, float *posYCur, float *posZCur)
     {
         *posXCur = 0; *posYCur = 0; *posZCur = 0;
@@ -496,41 +511,44 @@ public:
         // *posYCur = ratio * odomIncreY;
         // *posZCur = ratio * odomIncreZ;
     }
-    //3.1对点云中每个点进行去畸变
+
+    // > 对点云中每个点进行去畸变,需要转到最开始的lidar位置
     // 由于载体存在移动，扫描一圈后事实上并不会形成圆形，但此时的xyz是相对于当前时刻的lidar，
-    // 因为都属于同一帧所以需要转到最开始的lidar位置，也就是说对xyzrpy要加上一个位移和旋转
     PointType deskewPoint(PointType *point, double relTime)
     {
-        if (deskewFlag == -1 || cloudInfo.imuAvailable == false)
+        if (deskewFlag == -1 || cloudInfo.imuAvailable == false)  // 不去畸变
             return *point;
+
         //点云起始时间戳+相对于第一帧的时间戳
         double pointTime = timeScanCur + relTime;
         float rotXCur, rotYCur, rotZCur;
-        //3.1.1对点云位置去畸变 实际上计算的相对于世界坐标系原点的变化
+
+        //  ? 原注释：对点云位置去畸变 实际上计算的相对于世界坐标系原点的变化,
+        // ? 原注释是不对的，这显然求出来是相对于imuQueue中第一个Imu系的坐标，见line536左右
         findRotation(pointTime, &rotXCur, &rotYCur, &rotZCur);
+
         //3.1.2对点云位置去畸变
         float posXCur, posYCur, posZCur;
         findPosition(relTime, &posXCur, &posYCur, &posZCur);
 
-        if (firstPointFlag == true)
+        if (firstPointFlag == true) // ! firstPointFlag初始化为true，因为在去畸变时是按点云索引循环的，第一个索引就是对应第一个扫描点
         {
-            //将lidar(old)2world转为world2lidar(old)，也就是中心的位置
+            // ! 这里得到的第一个扫描点的坐标是相对于imuQueue中第一个Imu系的坐标，但是我们现在需要做的工作是将所有的扫描点都转换到第一个扫描点上，而不是imuQueue中第一个Imu系的坐标 -> 所以此处求逆
             transStartInverse = (pcl::getTransformation(posXCur, posYCur, posZCur, rotXCur, rotYCur, rotZCur)).inverse();
             firstPointFlag = false;
         }
 
         // transform points to start
-        //lidar(now)2wolrd 扫描到当前点时其所在的位置,相对于原始的lidar中心会更大一点 
         Eigen::Affine3f transFinal = pcl::getTransformation(posXCur, posYCur, posZCur, rotXCur, rotYCur, rotZCur);
-        //trans_A_B 表示B->A B在右下角 A在左上角
-        //初始时刻world2lidar(old)乘上当前时刻lidar(now)2wolrd得到的是 lidar(now)2lidar(old)(初始时刻指向当前时刻)
+
+        // ! 当前扫描点相对于第一个扫描点的变换
         Eigen::Affine3f transBt = transStartInverse * transFinal;
-        //[T00, T01, T02, T03]
-        //[T10, T11, T12, T03]
-        //[T20, T21, T22, T03]
-        //[0.,  0.,  0.,  1. ]
-        //transBt:lidar(now)2lidar(old)
-        // point->x 是point2lidar(now) 最终需要得到的是point2lidar(old)
+
+        // 以下相乘当前扫描点变换到第一个扫描点的坐标系下
+        // [T00, T01, T02, T03]
+        // [T10, T11, T12, T03]
+        // [T20, T21, T22, T03]
+        // [0.,  0.,  0.,  1. ]
         PointType newPoint;
         newPoint.x = transBt(0,0) * point->x + transBt(0,1) * point->y + transBt(0,2) * point->z + transBt(0,3);
         newPoint.y = transBt(1,0) * point->x + transBt(1,1) * point->y + transBt(1,2) * point->z + transBt(1,3);
@@ -539,7 +557,8 @@ public:
 
         return newPoint;
     }
-    //将深度信息投影到RangeImage上
+
+    // > 将深度信息投影到RangeImage上
     void projectPointCloud()
     {
         int cloudSize = (int)laserCloudIn->points.size();
@@ -556,13 +575,13 @@ public:
             if (rowIdn < 0 || rowIdn >= N_SCAN)
                 continue;
 
-            if (rowIdn % downsampleRate != 0)
+            if (rowIdn % downsampleRate != 0)  // ! downsampleRate默认1，这里相当于对RI进行一次降采样
                 continue;
 
+            // ? 特殊的索引变换
             float horizonAngle = atan2(thisPoint.x, thisPoint.y) * 180 / M_PI;
-
             static float ang_res_x = 360.0/float(Horizon_SCAN);
-            int columnIdn = -round((horizonAngle-90.0)/ang_res_x) + Horizon_SCAN/2;
+            int columnIdn = -round((horizonAngle-90.0)/ang_res_x) + Horizon_SCAN/2; 
             if (columnIdn >= Horizon_SCAN)
                 columnIdn -= Horizon_SCAN;
 
@@ -571,10 +590,10 @@ public:
 
             float range = pointDistance(thisPoint);
 
-            if (range < 1.0)
+            if (range < 1.0)  // 小于1m不要
                 continue;
 
-            if (rangeMat.at<float>(rowIdn, columnIdn) != FLT_MAX)
+            if (rangeMat.at<float>(rowIdn, columnIdn) != FLT_MAX) // 重复填充
                 continue;
 
             // for the amsterdam dataset
@@ -584,15 +603,17 @@ public:
             //     continue;
 
             rangeMat.at<float>(rowIdn, columnIdn) = range;
-            //3.1 对点云去畸变
-            thisPoint = deskewPoint(&thisPoint, laserCloudIn->points[i].time); // Velodyne
-            // thisPoint = deskewPoint(&thisPoint, (float)laserCloudIn->points[i].t / 1000000000.0); // Ouster
+
+            // 点云去畸变
+            thisPoint = deskewPoint(&thisPoint, laserCloudIn->points[i].time);  //  ! Velodyne
+            // thisPoint = deskewPoint(&thisPoint, (float)laserCloudIn->points[i].t / 1000000000.0);  // !  Ouster
 
             int index = columnIdn  + rowIdn * Horizon_SCAN;
             fullCloud->points[index] = thisPoint;
         }
     }
-    // > 点云RangeImage
+
+    // > 提取部分点云，主要是忽略RI的边缘点云
     void cloudExtraction()
     {
         int count = 0;
@@ -608,7 +629,6 @@ public:
                 if (rangeMat.at<float>(i,j) != FLT_MAX)
                 {
                     // mark the points' column index for marking occlusion later
-                    // 
                     cloudInfo.pointColInd[count] = j;
                     // save range info
                     cloudInfo.pointRange[count] = rangeMat.at<float>(i,j);
@@ -625,7 +645,10 @@ public:
     void publishClouds()
     {
         cloudInfo.header = cloudHeader; //点云的头部信息 包含时间戳、坐标系信息
+
+         // > sensor_msgs/PointCloud2形式直接赋值
         cloudInfo.cloud_deskewed  = publishCloud(&pubExtractedCloud, extractedCloud, cloudHeader.stamp, "base_link");
+        
         pubLaserCloudInfo.publish(cloudInfo);
     }
 };

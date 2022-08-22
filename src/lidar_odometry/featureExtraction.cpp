@@ -43,11 +43,16 @@ public:
         subLaserCloudInfo = nh.subscribe<lvi_sam::cloud_info>(PROJECT_NAME + "/lidar/deskew/cloud_info", 5, &FeatureExtraction::laserCloudInfoHandler, this, ros::TransportHints().tcpNoDelay());
 
         //订阅者subLaserCloudInfo处理完点云后，将相关数据通过如下三个发布者向后续节点发布数据；
+        // 发布特征点云信息
         pubLaserCloudInfo = nh.advertise<lvi_sam::cloud_info> (PROJECT_NAME + "/lidar/feature/cloud_info", 5);
+        
+        // 发布单独线点
         pubCornerPoints = nh.advertise<sensor_msgs::PointCloud2>(PROJECT_NAME + "/lidar/feature/cloud_corner", 5);
+
+        // 发布单独面点
         pubSurfacePoints = nh.advertise<sensor_msgs::PointCloud2>(PROJECT_NAME + "/lidar/feature/cloud_surface", 5);
         
-        //初始化相关容器
+        // 初始化相关容器
         initializationValue();
     }
 
@@ -68,21 +73,21 @@ public:
 
     void laserCloudInfoHandler(const lvi_sam::cloud_infoConstPtr& msgIn)
     {
-        // 1、预处理：点云格式转换
+        //  Step 1 预处理：点云格式转换
         cloudInfo = *msgIn; // new cloud info
         cloudHeader = msgIn->header; // new cloud header
         pcl::fromROSMsg(msgIn->cloud_deskewed, *extractedCloud); // new cloud for extraction
 
-        // 2、计算点云中各点曲率，为提取特征点左准备
+        // Step 2 计算点云中各点曲率，为提取特征点左准备
         calculateSmoothness();
 
-        // 3、屏蔽点云中被遮挡点或平行点
+        // Step 3 屏蔽点云中被遮挡点或平行点
         markOccludedPoints();
 
-        // 4、依据曲率，提取角特征和面特征
+        // Step 4 依据曲率，提取角特征和面特征
         extractFeatures();
 
-        // 5、向后续节点发布提取到的角特征和面特征
+        // Step 5 向后续节点发布提取到的角特征和面特征
         publishFeatureCloud();
     }
 
@@ -105,8 +110,6 @@ public:
             // 曲率采用距离的平方的形式
             // //diffX * diffX + diffY * diffY + diffZ * diffZ;
             cloudCurvature[i] = diffRange*diffRange;
-
-            
             
             //  计算特征点的标记位
             // 1:表示不参与提取特征点，可能受遮挡等
@@ -114,11 +117,10 @@ public:
             // 默认为参与提取特征点
             cloudNeighborPicked[i] = 0;
 
-            // 特征点的分类标记
-            // 1：曲率比较大
-            // 0:默认情况下，比较平坦点，现实世界也是以平面点为主；
-            // 不满足1、-1的情况下，都是0比较平坦点
-            // -1:平坦的点
+            // >  特征点的分类标记
+            // > 0：曲率比较小，默认情初始化为0，假设现实世界都是比较平坦的面点为主；
+            // > 1：曲率最大，每个scan分6等分，每一区域最多取20个线点
+            // > -1：曲率最小，每个scan分6等分，每一区域最多取不限数个面点(-1和0都算是面点)
             cloudLabel[i] = 0;
 
             // cloudSmoothness for sorting
@@ -189,7 +191,7 @@ public:
         for (int i = 0; i < N_SCAN; i++)
         {
             surfaceCloudScan->clear();
-            //每个scan6等分
+            // > 每个scan6等分
             for (int j = 0; j < 6; j++)
             {
 
@@ -202,21 +204,22 @@ public:
                 // 对当前提取段的曲率进行排序
                 // 按照曲率从小到大：by_value();
                 // cloudSmoothness: 点的index和曲率，排序按照曲率排序，尽管cloudSmoothness被打乱了，可以用index与曲率的关联找到,以及该点状态；
-                // 
                 std::sort(cloudSmoothness.begin() + sp, cloudSmoothness.begin() + ep, by_value());
 
                 //记录挑到的点数
                 int largestPickedNum = 0;
+
                 //选取曲率大的点，所以从后往前遍历；
                 for (int k = ep; k >= sp; k--)
                 {
                     //利用cloudSmoothness中index可以关联到该点是否参与提取特征点的状态
                     int ind = cloudSmoothness[k].ind;
+
                     //0：参与提取特征点，曲率大于阈值，则算1个合格特征点
                     if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] > edgeThreshold)
                     {
                         largestPickedNum++;
-                        //每个scan分成6段，每段提取满足条件的曲率前20大的点作为特征点
+                        //  > 每个scan分成6段，每段提取满足条件的曲率前20大的点作为特征点
                         if (largestPickedNum <= 20){
                             cloudLabel[ind] = 1;
                             cornerCloud->push_back(extractedCloud->points[ind]);
@@ -224,7 +227,7 @@ public:
                             break;
                         }
 
-                        //避免特征点过于集中，将当前点周围5个点状态置为1，不参与特征提取
+                        //  > 避免特征点过于集中，将当前点周围5个点状态置为1，不参与特征提取
                         cloudNeighborPicked[ind] = 1;
                         for (int l = 1; l <= 5; l++)
                         {
@@ -276,13 +279,13 @@ public:
 
                 for (int k = sp; k <= ep; k++)
                 {
-                    if (cloudLabel[k] <= 0){
+                    if (cloudLabel[k] <= 0){  // ! 一开始所有的点都默认cloudLabel[i] = 0，可见-1和0的点都存入面点点云了
                         surfaceCloudScan->push_back(extractedCloud->points[k]);
                     }
                 }
             }
 
-            //避免特征过大，造成计算时间过长，进行降采样；
+            // ! 特征点云下采样
             surfaceCloudScanDS->clear();
             downSizeFilter.setInputCloud(surfaceCloudScan);
             downSizeFilter.filter(*surfaceCloudScanDS);
@@ -312,9 +315,11 @@ public:
         freeCloudInfoMemory();
 
         // save newly extracted features
-        //发布最新的角点点云和面点点云
+        // 发布最新的角点点云和面点点云
+        // > sensor_msgs/PointCloud2形式直接赋值
         cloudInfo.cloud_corner  = publishCloud(&pubCornerPoints,  cornerCloud,  cloudHeader.stamp, "base_link");
         cloudInfo.cloud_surface = publishCloud(&pubSurfacePoints, surfaceCloud, cloudHeader.stamp, "base_link");
+
         // publish to mapOptimization
         pubLaserCloudInfo.publish(cloudInfo);
     }
