@@ -91,12 +91,20 @@ public:
             deskewFlag(0)
     {
         // 重新订阅了imu消息，与imuPreintegration.cpp无关
+        // > 用于点云去畸变和为scan2map提供初值的imu数据 -> 用在在VIS失效
         subImu        = nh.subscribe<sensor_msgs::Imu>        (imuTopic, 2000, &ImageProjection::imuHandler, this, ros::TransportHints().tcpNoDelay());
 
+        // ! 激光惯性子系统(LIS)与视觉惯性子系统的关系 -> 紧耦合关系
+        // > 1) VIS利用LIS的初始化估计来初始化，包括bias、位姿等，快且鲁棒
+        // > 2) VIS的精度提高依赖于LIS深度信息的提取
+        // > 3) LIS利用VIS结果来scan2map初始化，如果VIS失败，则直接使用imu的值
+        // > 4) 回环检测先经VIS，再LIS经匹配
+        // > 5) VIS和LIS都可以在一方失效后独立运行(VIS跟踪失败或LIS特征缺失)，提高整个系统的鲁棒性
+
         // ? 订阅vins的imu预积分里程计？
-        // ! 好像是lio-sam与vins的预积分结果互用，lio-sam的预积分里程计用于vins初始化，而vins预积分里程计用于lio-sam的去畸变
         // ! 原lio-sam此处为订阅imu增量式里程计：来自IMUPreintegration发布的增量式里程计话题(前一帧激光帧优化基础上), 这个话题已经不存在了，它用于去畸变和为scan2map提供初值
         // ! subOdom       = nh.subscribe<nav_msgs::Odometry>(odomTopic+"_incremental", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
+        // > 用于点云去畸变和scan2map提供初值的视觉里程计数据  -> VIS不失效时首选
         subOdom       = nh.subscribe<nav_msgs::Odometry>      (PROJECT_NAME + "/vins/odometry/imu_propagate_ros", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
 
         subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(pointCloudTopic, 5, &ImageProjection::cloudHandler, this, ros::TransportHints().tcpNoDelay());
