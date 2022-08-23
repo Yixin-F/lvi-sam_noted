@@ -2,7 +2,7 @@
 
 int FeatureTracker::n_id = 0;
 
-// 确定光流点是否超过图像边界
+// 确定光流点是否超过图像边界，边缘距离为1
 bool inBorder(const cv::Point2f &pt)
 {
     const int BORDER_SIZE = 1;
@@ -11,7 +11,7 @@ bool inBorder(const cv::Point2f &pt)
     return BORDER_SIZE <= img_x && img_x < COL - BORDER_SIZE && BORDER_SIZE <= img_y && img_y < ROW - BORDER_SIZE;
 }
 
-// 双指针方法，删除状态为0的点和id
+// > 双指针方法，删除状态为0的点和id
 void reduceVector(vector<cv::Point2f> &v, vector<uchar> status)
 {
     int j = 0;
@@ -35,36 +35,39 @@ void reduceVector(vector<int> &v, vector<uchar> status)
 FeatureTracker::FeatureTracker()
 {
 }
-// 给现有的特征点设置mask，目的为了特征点的均匀化
+// ? 给现有的特征点设置mask，目的为了特征点的均匀化，这跟均匀化有什么关系
 void FeatureTracker::setMask()
 {
+    // Step 1 导入鱼眼相机mask
     if(FISHEYE)
         mask = fisheye_mask.clone();
     else
         mask = cv::Mat(ROW, COL, CV_8UC1, cv::Scalar(255));
     
 
-    // prefer to keep features that are tracked for long time
+    // Step 2  prefer to keep features that are tracked for long time
     vector<pair<int, pair<cv::Point2f, int>>> cnt_pts_id;
 
     for (unsigned int i = 0; i < forw_pts.size(); i++)
         cnt_pts_id.push_back(make_pair(track_cnt[i], make_pair(forw_pts[i], ids[i])));
 
-    // 利用光流特点，追踪多的稳定性好，排前面
+    // Step 3 利用光流特点，追踪多的稳定性好，排前面
     sort(cnt_pts_id.begin(), cnt_pts_id.end(), [](const pair<int, pair<cv::Point2f, int>> &a, const pair<int, pair<cv::Point2f, int>> &b)
          {
             return a.first > b.first;
          });
 
+    // ! 清空容器
     forw_pts.clear();
     ids.clear();
     track_cnt.clear();
 
+    // Step 4 结合mask均匀选择特征
     for (auto &it : cnt_pts_id)
     {
         if (mask.at<uchar>(it.second.first) == 255)
         {
-            // 把挑选剩下的特征点重新放进容器
+            // ! 把挑选剩下的特征点重新放进容器
             forw_pts.push_back(it.second.first);
             ids.push_back(it.second.second);
             track_cnt.push_back(it.first);
@@ -96,8 +99,8 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
     // 判断图像是否需要进行自适应化图像
     if (EQUALIZE)
     {
-        // 自适应均衡化图像，调用opencv的函数
-        // 图像太暗或者太亮，提特征点比较难，所以均衡化一下
+        // > 自适应均衡化图像，调用opencv的函数
+        // > 图像太暗或者太亮，提特征点比较难，所以均衡化一下
         cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(3.0, cv::Size(8, 8));
         TicToc t_c;
         clahe->apply(_img, img);
@@ -106,7 +109,7 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
     else
         img = _img;
 
-    // 这里forw表示当前，cur表示上一帧
+    // ! 这里forw表示当前，cur表示上一帧
     if (forw_img.empty()) // 第一次输入图像，prev_img这个没用
     {
         // 初始化时，当前帧图像和上一帧设为相同
@@ -125,7 +128,9 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
         TicToc t_o;
         vector<uchar> status;
         vector<float> err;
-        // 通过opencv光流追踪给的状态位剔除outlier
+
+        // ! -----------------------------------------------------------------------------------------------------------------------------------------------------------
+        // > 通过opencv光流追踪，并根据每个特征点的跟踪好坏赋予状态位
         // void cv::calcOpticalFlowPyrLK	(	
         //         InputArray 	prevImg, 前一个图像
         //         InputArray 	nextImg, 当期图像
@@ -134,8 +139,8 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
         //         OutputArray 	status,  输出状态向量（无符号字符）;如果找到相应特征的流，则向量的每个元素设置为1，否则设置为0。
         //         OutputArray 	err,    输出错误的矢量; 向量的每个元素都设置为相应特征的错误
         //         Size 	winSize = Size(21, 21),每个金字塔等级的搜索窗口的winSize大小
-        //         int 	maxLevel = 3,   基于0的最大金字塔等级数
-        //    )
+        //         int 	maxLevel = 3,   基于0的最大金字塔等级数  )
+        // ! -----------------------------------------------------------------------------------------------------------------------------------------------------------
         cv::calcOpticalFlowPyrLK(cur_img, forw_img, cur_pts, forw_pts, status, err, cv::Size(21, 21), 3);
 
         // 遍历根据光流法在当前帧找到的光流点，
@@ -143,6 +148,7 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
         for (int i = 0; i < int(forw_pts.size()); i++)
             if (status[i] && !inBorder(forw_pts[i]))
                 status[i] = 0;
+
         // 根据找到2d矢量点的状态，删除不好的点和id；
         reduceVector(prev_pts, status); // 没用到
         reduceVector(cur_pts, status);
@@ -157,11 +163,13 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
     for (auto &n : track_cnt)
         n++;
 
-    if (PUB_THIS_FRAME)
+    if (PUB_THIS_FRAME)   // ! 确定发布此帧
     {
-        // 通过对级约束来剔除outlier
-        rejectWithF();
+        // > vins-mono通过对级约束来剔除outlier
+        // > orb-slam2是通过卡方分布来剔除outlier
+        rejectWithF();  
         ROS_DEBUG("set mask begins");
+
         TicToc t_m;
         // 设置掩码，特征均匀化
         setMask();
@@ -180,8 +188,10 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
                 cout << "mask type wrong " << endl;
             if (mask.size() != forw_img.size())
                 cout << "wrong size " << endl;
-                // 只有发布才可以提取更多特征点，同时避免提的点进mask
-            // 会不会这些点集中？会，不过没关系，他们下一次作为老将就得接受均匀化的洗礼
+
+            // ! -------------------------------------------------------------------------------------------------------------
+            // > 只有发布才可以提取更多特征点，同时避免提的点进mask
+            //  > 会不会这些点集中？会，不过没关系，他们下一次作为老将就得接受均匀化的洗礼
             // void cv::goodFeaturesToTrack(
             //         cv::InputArray image, // 输入图像（CV_8UC1 CV_32FC1）
             //         cv::OutputArray corners, // 输出角点vector
@@ -191,9 +201,8 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
             //         cv::InputArray mask = noArray(), // mask=0的点忽略
             //         int blockSize = 3, // 使用的邻域数
             //         bool useHarrisDetector = false, // false ='Shi Tomasi metric'
-            //         double k = 0.04 // Harris角点检测时使用
-            //     );
-
+            //         double k = 0.04 // Harris角点检测时使用);
+            // ! -------------------------------------------------------------------------------------------------------------
             cv::goodFeaturesToTrack(forw_img, n_pts, MAX_CNT - forw_pts.size(), 0.01, MIN_DIST, mask);
         }
         else
@@ -211,7 +220,12 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
     prev_un_pts = cur_un_pts; // 以上三个量无用
     cur_img = forw_img; // 实际上是上一帧的图像
     cur_pts = forw_pts; // 上一帧的特征点
+
+    // ! -------------------------------------------------------------
+    // > 当所有的特征点追踪完毕后，再进行图像去畸变
+    // ! -------------------------------------------------------------
     undistortedPoints();
+
     prev_time = cur_time;
 }
 
@@ -222,16 +236,19 @@ void FeatureTracker::rejectWithF()
     {
         ROS_DEBUG("FM ransac begins");
         TicToc t_f;
+
+        // ?  解释前面明明已经去畸变得到cur_un_pts和forw_un_pts了，为何新建容器重新去畸变存储？
+        // ? QinTong解释，这里只是为了对极约束的物理意义而已
+         // ?  这里用一个虚拟相机，原因同样参考https://github.com/HKUST-Aerial-Robotics/VINS-Mono/issues/48
         vector<cv::Point2f> un_cur_pts(cur_pts.size()), un_forw_pts(forw_pts.size());
         for (unsigned int i = 0; i < cur_pts.size(); i++)
         {
             Eigen::Vector3d tmp_p;
-            m_camera->liftProjective(Eigen::Vector2d(cur_pts[i].x, cur_pts[i].y), tmp_p);
-            // 这里用一个虚拟相机，原因同样参考https://github.com/HKUST-Aerial-Robotics/VINS-Mono/issues/48
-            // https://blog.csdn.net/hltt3838/article/details/119428558
-            // 这里有个好处就是对F_THRESHOLD和相机无关
+
+            // ! https://blog.csdn.net/hltt3838/article/details/119428558   ->  主要参考
             // 投影到虚拟相机的像素坐标系
-            tmp_p.x() = FOCAL_LENGTH * tmp_p.x() / tmp_p.z() + COL / 2.0;
+            m_camera->liftProjective(Eigen::Vector2d(cur_pts[i].x, cur_pts[i].y), tmp_p);      // 去畸变了但是未归一化
+            tmp_p.x() = FOCAL_LENGTH * tmp_p.x() / tmp_p.z() + COL / 2.0;   // 去畸变的未归一化坐标，在归一化后，变成像素坐标
             tmp_p.y() = FOCAL_LENGTH * tmp_p.y() / tmp_p.z() + ROW / 2.0;
             un_cur_pts[i] = cv::Point2f(tmp_p.x(), tmp_p.y());
 
@@ -242,8 +259,12 @@ void FeatureTracker::rejectWithF()
         }
 
         vector<uchar> status;
-        // opencv接口计算本质矩阵，某种意义也是一种对级约束的outlier剔除
+        
+        // !  -----------------------------------------------------------------------------------------
+        // > opencv接口计算本质矩阵，某种意义也是一种对级约束的outlier剔除
+        // !  -----------------------------------------------------------------------------------------
         cv::findFundamentalMat(un_cur_pts, un_forw_pts, cv::FM_RANSAC, F_THRESHOLD, 0.99, status);
+
         int size_a = cur_pts.size();
         reduceVector(prev_pts, status);
         reduceVector(cur_pts, status);
@@ -255,7 +276,8 @@ void FeatureTracker::rejectWithF()
         ROS_DEBUG("FM ransac costs: %fms", t_f.toc());
     }
 }
-//给新的特征点赋上id,越界就返回false
+
+//给新的特征点赋上id, 越界就返回false
 bool FeatureTracker::updateID(unsigned int i)
 {
     if (i < ids.size())
@@ -319,12 +341,18 @@ void FeatureTracker::undistortedPoints()
     {
         Eigen::Vector2d a(cur_pts[i].x, cur_pts[i].y);
         Eigen::Vector3d b;
-        m_camera->liftProjective(a, b);
-        cur_un_pts.push_back(cv::Point2f(b.x() / b.z(), b.y() / b.z()));
+
+        // ! ------------------------------------------------------------------------------------------------------------------------------
+        // > 去畸变主函数.liftProjective(2维像素坐标，去畸变的3维坐标)，没有直接使用cv::undistortPoints()
+        // ! ------------------------------------------------------------------------------------------------------------------------------
+        m_camera->liftProjective(a, b);  // ? 2维向3维的一种映射，b是无畸变3维坐标
+        cur_un_pts.push_back(cv::Point2f(b.x() / b.z(), b.y() / b.z()));  // ? 归一化坐标
         cur_un_pts_map.insert(make_pair(ids[i], cv::Point2f(b.x() / b.z(), b.y() / b.z())));
+
         //printf("cur pts id %d %f %f", ids[i], cur_un_pts[i].x, cur_un_pts[i].y);
     }
-    // caculate points velocity
+
+    // ? caculate points velocity，计算速度有什么用？
     if (!prev_un_pts_map.empty())
     {
         double dt = cur_time - prev_time;

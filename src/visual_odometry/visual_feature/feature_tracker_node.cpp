@@ -36,7 +36,7 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
     // 获取当前图像中时间戳
     double cur_img_time = img_msg->header.stamp.toSec();
 
-    // 判断是否是第一针，已更新上一帧时间戳
+    // 判断是否是第一帧，已更新上一帧时间戳
     // 若是第一帧，则更新last_image_time直接退出
     // 若不是第一帧，直接跳过这个if
     if(first_image_flag)
@@ -65,7 +65,8 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
     // 更新上一针时间戳
     last_image_time = cur_img_time;
     
-    // 频率控制，满足要求则发布当前帧
+    // ! 频率控制，满足要求则发布当前帧
+    // > 因为相机数据流的频率很高，这里是为了根据自己实验平台的性能来调整处理频率，因为光流跟踪不像特征匹配那么严苛，即使跟踪频率不高也不会有太大问题
     if (round(1.0 * pub_count / (cur_img_time - first_image_time)) <= FREQ)
     {
         PUB_THIS_FRAME = true;
@@ -81,7 +82,7 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
         PUB_THIS_FRAME = false;
     }
 
-    // ros图像格式转化为opencv格式
+    // > ros图像格式转化为opencv格式(可学习)
     cv_bridge::CvImageConstPtr ptr;
     if (img_msg->encoding == "8UC1")
     {
@@ -191,6 +192,9 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
         *depth_cloud_temp = *depthCloud;
         mtx_lidar.unlock();
 
+        // ! --------------------
+        // > 特征深度关联
+        // ! --------------------
         sensor_msgs::ChannelFloat32 depth_of_points = depthRegister->get_depth(img_msg->header.stamp, show_img, depth_cloud_temp, trackerData[0].m_camera, feature_points->points);
         feature_points->channels.push_back(depth_of_points);
         
@@ -249,7 +253,7 @@ void lidar_callback(const sensor_msgs::PointCloud2ConstPtr& laser_msg)
         return;
 
     // 0. listen to transform
-    // 0. 利用tf工具监听变换
+    // Step 0  利用tf工具监听变换
     static tf::TransformListener listener;
     static tf::StampedTransform transform;
     try{
@@ -276,13 +280,11 @@ void lidar_callback(const sensor_msgs::PointCloud2ConstPtr& laser_msg)
     Eigen::Affine3f transNow = pcl::getTransformation(xCur, yCur, zCur, rollCur, pitchCur, yawCur);
 
 
-
-
-    // 1. ROS格式点云数据转换为PCL格式数据
+    // Step 1 ROS格式点云数据转换为PCL格式数据
     pcl::PointCloud<PointType>::Ptr laser_cloud_in(new pcl::PointCloud<PointType>());
     pcl::fromROSMsg(*laser_msg, *laser_cloud_in);
 
-    // 2. 对点云数据进行降采样
+    // Step 2 对点云数据进行降采样
     pcl::PointCloud<PointType>::Ptr laser_cloud_in_ds(new pcl::PointCloud<PointType>());
     static pcl::VoxelGrid<PointType> downSizeFilter;
     downSizeFilter.setLeafSize(0.2, 0.2, 0.2);
@@ -291,7 +293,7 @@ void lidar_callback(const sensor_msgs::PointCloud2ConstPtr& laser_msg)
     // 下采样后，重新放回lase_cloud_in
     *laser_cloud_in = *laser_cloud_in_ds;
 
-    // 3. 对雷达点云数据进行滤波，只保留在相机视野内的雷达点
+    // Step 3 对雷达点云数据进行滤波，只保留在相机视野内的雷达点
     // laser_cloud_in_filter:保留在相机视野内的点云
     pcl::PointCloud<PointType>::Ptr laser_cloud_in_filter(new pcl::PointCloud<PointType>());
     for (int i = 0; i < (int)laser_cloud_in->size(); ++i)
@@ -306,25 +308,27 @@ void lidar_callback(const sensor_msgs::PointCloud2ConstPtr& laser_msg)
 
     // TODO: transform to IMU body frame
     // 4. offset T_lidar -> T_camera 
-    // 4. 将雷达点云转换至相机坐标系
+    // Step 4  将雷达点云转换至相机坐标系
     pcl::PointCloud<PointType>::Ptr laser_cloud_offset(new pcl::PointCloud<PointType>());
-    Eigen::Affine3f transOffset = pcl::getTransformation(L_C_TX, L_C_TY, L_C_TZ, L_C_RX, L_C_RY, L_C_RZ);//雷达到相机的外参
+    Eigen::Affine3f transOffset = pcl::getTransformation(L_C_TX, L_C_TY, L_C_TZ, L_C_RX, L_C_RY, L_C_RZ);  // ! 雷达到相机的外参
     // 使用transOffset对laser_cloud_in转换，存放在laser_cloud_offset
     pcl::transformPointCloud(*laser_cloud_in, *laser_cloud_offset, transOffset);
     // 旋转后，重新放回lase_cloud_in
     *laser_cloud_in = *laser_cloud_offset;
 
     // 5. transform new cloud into global odom frame
-    // 5. 将雷达点云转换为全局里程计坐标系
+    // ! -------------------------------------------------------
+    // Step 5 将雷达点云转换为全局里程计坐标系
+    // ! -------------------------------------------------------
     pcl::PointCloud<PointType>::Ptr laser_cloud_global(new pcl::PointCloud<PointType>());
     pcl::transformPointCloud(*laser_cloud_in, *laser_cloud_global, transNow);
 
-    // 6. 保存最后转换完的点云和对应时间戳
+    // Step 6 保存最后转换完的点云和对应时间戳
     double timeScanCur = laser_msg->header.stamp.toSec();
     cloudQueue.push_back(*laser_cloud_global);
     timeQueue.push_back(timeScanCur);
 
-    // 7. 弹出当前雷达点云5s以前的数据
+    // Step 7 弹出当前雷达点云5s以前的数据
     while (!timeQueue.empty())
     {
         if (timeScanCur - timeQueue.front() > 5.0)
@@ -338,12 +342,12 @@ void lidar_callback(const sensor_msgs::PointCloud2ConstPtr& laser_msg)
 
     std::lock_guard<std::mutex> lock(mtx_lidar);
 
-    // 8. 融合全局点云
+    // Step 8  融合全局点云
     depthCloud->clear();
     for (int i = 0; i < (int)cloudQueue.size(); ++i)
         *depthCloud += cloudQueue[i];
 
-    // 9. 对全局点云进行下采样
+    // Step 9  对全局点云进行下采样
     pcl::PointCloud<PointType>::Ptr depthCloudDS(new pcl::PointCloud<PointType>());
     downSizeFilter.setLeafSize(0.2, 0.2, 0.2);
     downSizeFilter.setInputCloud(depthCloud);
@@ -389,6 +393,7 @@ int main(int argc, char **argv)
     // 订阅图像和雷达数据
     ros::Subscriber sub_img   = n.subscribe(IMAGE_TOPIC,       5,    img_callback);
     ros::Subscriber sub_lidar = n.subscribe(POINT_CLOUD_TOPIC, 5,    lidar_callback);
+
     if (!USE_LIDAR)
         sub_lidar.shutdown();
 
@@ -398,7 +403,7 @@ int main(int argc, char **argv)
     pub_restart = n.advertise<std_msgs::Bool>         (PROJECT_NAME + "/vins/feature/restart",     5);
 
     // two ROS spinners for parallel processing (image and lidar)
-    // 雷达和图像并行处理
+    // !  雷达和图像并行处理
     ros::MultiThreadedSpinner spinner(2);
     spinner.spin();
 

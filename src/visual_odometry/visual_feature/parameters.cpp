@@ -14,7 +14,7 @@ int FREQ;
 double F_THRESHOLD;
 int SHOW_TRACK;
 int STEREO_TRACK;
-int EQUALIZE;
+int EQUALIZE;  // 图亮度自适应化标志
 int ROW;
 int COL;
 int FOCAL_LENGTH;

@@ -17,7 +17,7 @@
 #include "tic_toc.h"
 
 using namespace std;
-using namespace camodocal;
+using namespace camodocal;  // > 相机标定库
 using namespace Eigen;
 
 bool inBorder(const cv::Point2f &pt);
@@ -51,6 +51,8 @@ class FeatureTracker
 
     cv::Mat fisheye_mask;
 
+    // ! cur_img代表上一帧；forw_img代表当前帧；prev_img无具体用处，只是暂时存储上上帧cur_img
+    // ! 所有prev_*变量都没有具体用处，只是暂存上上帧特征数据
     cv::Mat prev_img, cur_img, forw_img;
 
     //最大特征点数-当前帧已经提取特征点：剩余需要提取的特征点
@@ -71,6 +73,7 @@ class FeatureTracker
     //对应特征点跟踪次数
     vector<int> track_cnt;
 
+    // 当前帧图像特征点map,id->坐标的map
     map<int, cv::Point2f> cur_un_pts_map;
 
     //上一帧图像特征点map,id->坐标的map
@@ -84,7 +87,9 @@ class FeatureTracker
     static int n_id;
 };
 
-
+// ! -------------------------------------------
+// > 相机特征与激光RI进行深度关联
+// ! -------------------------------------------
 class DepthRegister
 {
 public:
@@ -109,36 +114,39 @@ public:
         pub_depth_image =   n.advertise<sensor_msgs::Image>      (PROJECT_NAME + "/vins/depth/depth_image",   5);
         pub_depth_cloud =   n.advertise<sensor_msgs::PointCloud2>(PROJECT_NAME + "/vins/depth/depth_cloud",   5);
 
-        pointsArray.resize(num_bins);
+        pointsArray.resize(num_bins);  // 360 x360
         for (int i = 0; i < num_bins; ++i)
             pointsArray[i].resize(num_bins);
     }
 
+    // > 深度关联主函数
     sensor_msgs::ChannelFloat32 get_depth(const ros::Time& stamp_cur, const cv::Mat& imageCur, 
                                           const pcl::PointCloud<PointType>::Ptr& depthCloud,
                                           const camodocal::CameraPtr& camera_model ,
                                           const vector<geometry_msgs::Point32>& features_2d)
     {
-        // 0.1 初始化存储特征点深度的容器，大小为特征点数量，初值都为-1；
+        //  Step 1 初始化存储特征点深度的容器，大小为特征点数量，初值都为-1；
         sensor_msgs::ChannelFloat32 depth_of_point;
         depth_of_point.name = "depth";
         depth_of_point.values.resize(features_2d.size(), -1);
 
-        // 0.2  确认雷达点云是否可用，若为空直接返回；
+        // Step  2  确认雷达点云是否可用，若为空直接返回；
         if (depthCloud->size() == 0)
             return depth_of_point;
 
-        // 0.3 look up transform at current image time
-        // 0.3 查询当前图像帧时刻的变换，监听从世界坐标系到body坐标系的变换
+        // 3 look up transform at current image time
+        // Step 3 查询当前图像帧时刻的变换，监听从世界坐标系到body坐标系的变换
+        // ! 监听的tf变换来自于 visual_estimator/visualization.cpp/line92左右
         try{
             listener.waitForTransform("vins_world", "vins_body_ros", stamp_cur, ros::Duration(0.01));
-            listener.lookupTransform("vins_world", "vins_body_ros", stamp_cur, transform);
+            listener.lookupTransform("vins_world", "vins_body_ros", stamp_cur, transform);  // > transform暂存tf坐标变换
         } 
         catch (tf::TransformException ex){
-            // ROS_ERROR("image no tf");
+            ROS_ERROR("image no tf");
             return depth_of_point;
         }
 
+        // tf转T
         double xCur, yCur, zCur, rollCur, pitchCur, yawCur;
         xCur = transform.getOrigin().x();
         yCur = transform.getOrigin().y();
@@ -147,67 +155,73 @@ public:
         m.getRPY(rollCur, pitchCur, yawCur);
         Eigen::Affine3f transNow = pcl::getTransformation(xCur, yCur, zCur, rollCur, pitchCur, yawCur);
 
-        // 0.4 transform cloud from global frame to camera frame
-        // 0.4 将点云坐标系从世界坐标系变换到相机坐标系
+        // Step 4 transform cloud from global frame to camera frame
+        // ? 0.4 将点云坐标系从世界坐标系变换到相机坐标系, 这个depthCloud传入的时候就是世界系？？是的，在feature_tracker_node.cpp的line320左右
         pcl::PointCloud<PointType>::Ptr depth_cloud_local(new pcl::PointCloud<PointType>());
-        pcl::transformPointCloud(*depthCloud, *depth_cloud_local, transNow.inverse());
+        pcl::transformPointCloud(*depthCloud, *depth_cloud_local, transNow.inverse());  // ? 为什么是乘以逆
 
-        // 0.5 project undistorted normalized (z) 2d features onto a unit sphere
-        // 0.5 投影去畸变归一化的2d特征点到单位球面；
+        // Step 5 project undistorted normalized (z) 2d features onto a unit sphere
+        //  > 0.5 投影去畸变归一化的2d特征点到单位球面；
         pcl::PointCloud<PointType>::Ptr features_3d_sphere(new pcl::PointCloud<PointType>());
         for (int i = 0; i < (int)features_2d.size(); ++i)
         {
             // normalize 2d feature to a unit sphere
             Eigen::Vector3f feature_cur(features_2d[i].x, features_2d[i].y, features_2d[i].z); // z always equal to 1
             feature_cur.normalize(); 
-            // convert to ROS standard
+
+            // ?  convert to ROS standard, 难道是geometry_msgs::Point32的存储格式问题？
+            // ? 感觉应该是lidar和camera系的转换关系，见params_camera.yaml的line20左右 xxxxxxx, 不是的，lidar像camera的外参变换在feature_tracker_node.cpp的line310左右
             PointType p;
             p.x =  feature_cur(2);
             p.y = -feature_cur(0);
             p.z = -feature_cur(1);
-            p.intensity = -1; // intensity will be used to save depth
+            p.intensity = -1;  // ! intensity will be used to save depth
             features_3d_sphere->push_back(p);
         }
 
-        // 3. project depth cloud on a range image, filter points satcked in the same region
-        // 3. 投影深度图至离散化表格range image，实现同一区域点云滤波的效果；
-
+        // 6 project depth cloud on a range image, filter points satcked in the same region
+        // Step  6 投影深度图至离散化表格range image 180 x 180，实现同一区域点云滤波的效果；
         float bin_res = 180.0 / (float)num_bins; // currently only cover the space in front of lidar (-90 ~ 90)
         cv::Mat rangeImage = cv::Mat(num_bins, num_bins, CV_32F, cv::Scalar::all(FLT_MAX));
 
         for (int i = 0; i < (int)depth_cloud_local->size(); ++i)
         {
             PointType p = depth_cloud_local->points[i];
+
             // filter points not in camera view
-            // 判断当前点世超出相机视野
+            // 判断当前点是否超出相机视野
             if (p.x < 0 || abs(p.y / p.x) > 10 || abs(p.z / p.x) > 10)
                 continue;
+
             // find row id in range image
             // 俯仰角离散化，为行序号
             float row_angle = atan2(p.z, sqrt(p.x * p.x + p.y * p.y)) * 180.0 / M_PI + 90.0; // degrees, bottom -> up, 0 -> 360
             int row_id = round(row_angle / bin_res);
+
             // find column id in range image
             // 水平角离散化，作为列序号
             float col_angle = atan2(p.x, p.y) * 180.0 / M_PI; // degrees, left -> right, 0 -> 360
             int col_id = round(col_angle / bin_res);
+
             // id may be out of boundary
             // 判断是否超过离散化表格边界
             if (row_id < 0 || row_id >= num_bins || col_id < 0 || col_id >= num_bins)
                 continue;
+
             // only keep points that's closer
             // 离散表格每个表格值保留该区域中最近的点
             float dist = pointDistance(p);
             if (dist < rangeImage.at<float>(row_id, col_id))
             {
-                // range image记录距离
-                // pointArray记录该点
+                // > ange image记录距离
+                // > pointArray记录
                 rangeImage.at<float>(row_id, col_id) = dist;
                 pointsArray[row_id][col_id] = p;
             }
         }
 
-        // 4. extract downsampled depth cloud from range image
-        // 4. 从离散图range image中距离有效的点，形成新的深度点云图；
+        // 7 extract downsampled depth cloud from range image
+        // Step  7 从离散图range image中距离有效的点，形成新的深度点云图；
         pcl::PointCloud<PointType>::Ptr depth_cloud_local_filter2(new pcl::PointCloud<PointType>());
         for (int i = 0; i < num_bins; ++i)
         {
@@ -220,8 +234,8 @@ public:
         *depth_cloud_local = *depth_cloud_local_filter2;
         publishCloud(&pub_depth_cloud, depth_cloud_local, stamp_cur, "vins_body_ros");
 
-        // 5. project depth cloud onto a unit sphere
-        // 5. 将深度点云图投影至单位球面;
+        // 8. project depth cloud onto a unit sphere
+        // Step  8  将深度点云图投影至单位球面;
         pcl::PointCloud<PointType>::Ptr depth_cloud_unit_sphere(new pcl::PointCloud<PointType>());
         for (int i = 0; i < (int)depth_cloud_local->size(); ++i)
         {
@@ -236,13 +250,13 @@ public:
         if (depth_cloud_unit_sphere->size() < 10)
             return depth_of_point;
 
-        // 6. create a kd-tree using the spherical depth cloud
-        // 6. 用单位球面点云图构建kd树
+        // 9. create a kd-tree using the spherical depth cloud
+        // Step  9 用单位球面点云图构建kd树
         pcl::KdTreeFLANN<PointType>::Ptr kdtree(new pcl::KdTreeFLANN<PointType>());
         kdtree->setInputCloud(depth_cloud_unit_sphere);
 
-        // 7. find the feature depth using kd-tree
-        // 7.使用KD树寻找距离图像特征最近的三个点,并求解相机中心经图像特征的向量到这三个点平面的距离；
+        // 10. find the feature depth using kd-tree
+        // Step 10 使用KD树寻找距离图像特征最近的三个点,并求解相机中心经图像特征的向量到这三个点平面的距离；
         vector<int> pointSearchInd;
         vector<float> pointSearchSqDis;
         float dist_sq_threshold = pow(sin(bin_res / 180.0 * M_PI) * 5.0, 2);
@@ -251,6 +265,7 @@ public:
             kdtree->nearestKSearch(features_3d_sphere->points[i], 3, pointSearchInd, pointSearchSqDis);
             if (pointSearchInd.size() == 3 && pointSearchSqDis[2] < dist_sq_threshold)
             {
+                // > 得ABC三个向量
                 float r1 = depth_cloud_unit_sphere->points[pointSearchInd[0]].intensity;
                 Eigen::Vector3f A(depth_cloud_unit_sphere->points[pointSearchInd[0]].x * r1,
                                   depth_cloud_unit_sphere->points[pointSearchInd[0]].y * r1,
@@ -305,6 +320,10 @@ public:
                 depth_of_point.values[i] = features_3d_sphere->points[i].intensity;
         }
 
+        // Step  11 标注
+        // ! ----------------------------------------------------------------
+        // > 在图片上标注关联成功的特征点(标注方式可学习)
+        // ! ----------------------------------------------------------------
         // visualization project points on image for visualization (it's slow!)
         if (pub_depth_image.getNumSubscribers() != 0)
         {
@@ -318,7 +337,7 @@ public:
                                      -depth_cloud_local->points[i].z,
                                       depth_cloud_local->points[i].x);
                 Eigen::Vector2d p_2d;
-                camera_model->spaceToPlane(p_3d, p_2d);
+                camera_model->spaceToPlane(p_3d, p_2d);  // > 往平面归一化投影
                 
                 points_2d.push_back(cv::Point2f(p_2d(0), p_2d(1)));
                 points_distance.push_back(pointDistance(depth_cloud_local->points[i]));
@@ -326,7 +345,7 @@ public:
 
             cv::Mat showImage, circleImage;
             cv::cvtColor(imageCur, showImage, cv::COLOR_GRAY2RGB);
-            circleImage = showImage.clone();
+            circleImage = showImage.clone();  // ! 一定要.clone()，cv里的图片相等是指针传递
             for (int i = 0; i < (int)points_2d.size(); ++i)
             {
                 float r, g, b;
