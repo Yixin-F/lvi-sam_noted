@@ -104,13 +104,13 @@ public:
 
         // imu 预积分的噪声协方差
         // > 协方差的初值一般都是标定出来的，然后在后面的传播中更新，如isam2优化、滤波等
-        boost::shared_ptr<gtsam::PreintegrationParams> p = gtsam::PreintegrationParams::MakeSharedU(imuGravity);
-        p->accelerometerCovariance  = gtsam::Matrix33::Identity(3,3) * pow(imuAccNoise, 2); // acc white noise in continuous // ? 对角线形式，zyz互不影响？
+        boost::shared_ptr<gtsam::PreintegrationParams> p = gtsam::PreintegrationParams::MakeSharedU(imuGravity);  // ? 重力去除，难道不用重力对齐z方向吗？
+        p->accelerometerCovariance  = gtsam::Matrix33::Identity(3,3) * pow(imuAccNoise, 2); // acc white noise in continuous // ? 对角线形式，xyz互不影响？就是这样设计的，后面会传播
         p->gyroscopeCovariance      = gtsam::Matrix33::Identity(3,3) * pow(imuGyrNoise, 2); // gyro white noise in continuous
         p->integrationCovariance    = gtsam::Matrix33::Identity(3,3) * pow(1e-4, 2); // error committed in integrating position from velocities
         gtsam::imuBias::ConstantBias prior_imu_bias((gtsam::Vector(6) << 0, 0, 0, 0, 0, 0).finished());; // assume zero initial bias  // ? 初始bias不是标定来的吗，这里全默认为0了，直接等待优化？
 
-        // 噪声先验
+        // !  噪声先验，初值取的没有道理，作者经过实验得到的
         priorPoseNoise  = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 1e-2, 1e-2, 1e-2, 1e-2, 1e-2, 1e-2).finished()); // rad,rad,rad,m, m, m
         priorVelNoise   = gtsam::noiseModel::Isotropic::Sigma(3, 1e2); // m/s
         priorBiasNoise  = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3); // 1e-2 ~ 1e-3 seems to be good
