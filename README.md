@@ -81,7 +81,6 @@ docker镜像已上传docker-hub，可以拉取镜像按照教程使用节约环�
 </center>
 
 
-
 ## 四、在M2DGR数据集上演示
 感谢上海交通大学邹丹平老师团队录制的开源数据集M2DGR，提供了更为丰富的多传感器数据方便我们验证LVI-SAM算法  
 数据集链接：https://github.com/SJTU-ViSYS/M2DGR  
@@ -93,7 +92,6 @@ docker镜像已上传docker-hub，可以拉取镜像按照教程使用节约环�
 <center>
 <img src="https://github.com/shuttworth/Record_Issues_For_LVI-SAM_detailed_comments/blob/main/img/street_08_v1.gif" width="70%">
 </center>
-
 
 
 ## 五、学习小组分享顺序
@@ -111,17 +109,3 @@ docker镜像已上传docker-hub，可以拉取镜像按照教程使用节约环�
 视频和课件分享见 [cvlife.net](https://cvlife.net/detail/p_620a027fe4b02b82584a90e2/6) 
 
 
-
-## 六、中文代码注释
-
-中文注释的代码已全部上传
-
-期待反馈当前注释存在的问题！
-
-
-
-## 七、LVI-SAM 原仓库链接
-
-https://github.com/TixiaoShan/LVI-SAM
-
-# lvi-sam_noted
