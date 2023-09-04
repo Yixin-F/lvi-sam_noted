@@ -38,10 +38,6 @@ Jiarong Liu(Shanghai Jiao Tong University)
 
 -by 计算机视觉life 旗下 [SLAM知识星球学习小组](https://mp.weixin.qq.com/s/Lzn7jUPRwpbMqe-5Ku9Ksg)
 
-**参与人员**（排名不分先后）：
-
-荆黎明（东北大学）、刘嘉林（复旦大学）、汪寿安（中国矿业大学北京）、万文俊（中科院计算所）、周新杰（哈工大）、乔生（吉林大学）、刘嘉荣（上海交通大学）
-
 ## 一、我们的贡献
 1. 为源代码提供了详细的中文注释
 2. 制作了docker镜像，可节约本地环境配置时间
