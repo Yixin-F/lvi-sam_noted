@@ -67,13 +67,13 @@ docker镜像已上传docker-hub，可以拉取镜像按照教程使用节约环�
 ### 采集设备
 
 <center>
-<img src="https://github.com/shuttworth/Record_Issues_For_LVI-SAM_detailed_comments/blob/main/img/device.jpg" width="70%">
+<img src="https://github.com/shuttworth/Record_Issues_For_LVI-SAM_detailed_comments/blob/main/img/device.jpg" width="50%">
 </center>
 
 
 ### 建图效果
 <center>
-<img src="https://github.com/shuttworth/Record_Issues_For_LVI-SAM_detailed_comments/blob/main/img/result.png" width="70%">
+<img src="https://github.com/shuttworth/Record_Issues_For_LVI-SAM_detailed_comments/blob/main/img/result.png" width="50%">
 </center>
 
 
@@ -82,11 +82,11 @@ docker镜像已上传docker-hub，可以拉取镜像按照教程使用节约环�
 数据集链接：https://github.com/SJTU-ViSYS/M2DGR  
 我们在该数据集上进行了相关适配，如果您想使用它，请切换到LVI-SAM_M2DGR分支
 <center>
-<img src="https://github.com/shuttworth/Record_Issues_For_LVI-SAM_detailed_comments/blob/main/img/gate_01_v1.gif" width="70%">
+<img src="https://github.com/shuttworth/Record_Issues_For_LVI-SAM_detailed_comments/blob/main/img/gate_01_v1.gif" width="50%">
 </center>
 
 <center>
-<img src="https://github.com/shuttworth/Record_Issues_For_LVI-SAM_detailed_comments/blob/main/img/street_08_v1.gif" width="70%">
+<img src="https://github.com/shuttworth/Record_Issues_For_LVI-SAM_detailed_comments/blob/main/img/street_08_v1.gif" width="50%">
 </center>
 
 
